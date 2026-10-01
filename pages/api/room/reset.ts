@@ -17,7 +17,7 @@ export default async function handler(
     // We mark the finished battle as 'archived' so the frontend stops finding it.
     await supabaseAdmin
       .from("battles")
-      .update({ status: 'archived' }) 
+      .update({ status: 'archived' })
       .eq("room_id", room_id)
       .eq("status", "finished");
 
@@ -25,7 +25,7 @@ export default async function handler(
     // Ensure the room knows there is no active battle currently
     await supabaseAdmin
       .from("rooms")
-      .update({ active_battle_id: null, current_round: 0 }) 
+      .update({ active_battle_id: null, current_round: 0 })
       .eq("id", room_id);
 
     /* 3. RESET GUESTS (Make them Not Ready) */
@@ -33,21 +33,21 @@ export default async function handler(
       .from("room_players")
       .update({ is_ready: false })
       .eq("room_id", room_id)
-      .eq("is_host", false); 
+      .eq("is_host", false);
 
     /* 4. RESET HOST (Make them ALWAYS Ready) */
     await supabaseAdmin
       .from("room_players")
       .update({ is_ready: true })
       .eq("room_id", room_id)
-      .eq("is_host", true); 
+      .eq("is_host", true);
 
     /* 5. RESET SCORES */
     // Resetting to 0 is good for the lobby display
-    await supabaseAdmin
+    /*await supabaseAdmin
       .from("player_scores")
       .update({ total_score: 0 })
-      .eq("room_id", room_id);
+      .eq("room_id", room_id);*/
 
     return res.status(200).json({ success: true });
   } catch (error: any) {

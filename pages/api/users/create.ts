@@ -2,6 +2,7 @@
 // Purpose: Create a player row in the "players" table after Google login.
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { getAuthenticatedUser } from "@/lib/apiAuth";
 
 export default async function handler(
 	req: NextApiRequest,
@@ -11,10 +12,18 @@ export default async function handler(
 		return res.status(405).json({ error: "Method not allowed" });
 	}
 
+	// 1️⃣ Auth Check
+	const authUser = await getAuthenticatedUser(req);
+	if (!authUser) return res.status(401).json({ error: "Unauthorized" });
+
 	const { user } = req.body;
 
 	if (!user || !user.id) {
 		return res.status(400).json({ error: "Invalid user data" });
+	}
+
+	if (user.id !== authUser.id) {
+		return res.status(403).json({ error: "Cannot create profile for another user" });
 	}
 
 	// Insert or update player record

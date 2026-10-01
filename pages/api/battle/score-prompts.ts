@@ -6,6 +6,8 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY!,
 });
 
+import { getAuthenticatedUser } from "@/lib/apiAuth";
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -14,7 +16,11 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { room_id, round_id, image_url } = req.body;
+  // 1️⃣ Auth Check
+  const user = await getAuthenticatedUser(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+  const { room_id, round_id, image_url, battle_id } = req.body;
 
   if (!room_id || !round_id || !image_url) {
     return res.status(400).json({
@@ -37,14 +43,14 @@ export default async function handler(
   if (!prompts || prompts.length === 0) {
     return res.status(200).json({ message: "No prompts to score." });
   }
-  
+
   const validPrompts = prompts.filter(p => p.prompt_text && p.prompt_text.trim().length > 0);
   const emptyPrompts = prompts.filter(p => !p.prompt_text || p.prompt_text.trim().length === 0);
 
   let aiEvaluations: any[] = [];
 
   /* ---------------- 3. CALL GEMINI (Only for Valid Prompts) ---------------- */
-  
+
   if (validPrompts.length > 0) {
     const promptList = validPrompts
       .map(
@@ -85,7 +91,7 @@ Return ONLY valid JSON:
 
     try {
       const geminiResult = await ai.models.generateContent({
-        model: "gemini-2.5-flash-lite", 
+        model: "gemini-2.5-flash-lite",
         contents,
       });
 
@@ -125,23 +131,68 @@ Return ONLY valid JSON:
     //  Reset Player Ready State (Safe Update)
     await supabaseAdmin
       .from("room_players")
-      .update({ is_ready: false }) 
+      .update({ is_ready: false })
       .eq("room_id", room_id)
       .eq("user_id", ev.user_id);
 
-    //  Increment Score
-    const { error } = await supabaseAdmin.rpc(
-      "increment_player_score",
-      {
-        p_room_id: room_id,
-        p_user_id: ev.user_id,
-        p_score: ev.score,
-      },
-    );
-
-    if (error) {
-      console.error("❌ increment_player_score failed", error);
+    if (!battle_id) {
+      console.error("❌ MISSING BATTLE ID, CANNOT UPSERT SCORE. User:", ev.user_id);
+      continue;
     }
+
+    // 4. Calculate Total Score (Self-Healing)
+    // We sum all prompt scores for this user in this battle to ensure accuracy
+    const { data: totalScoreData, error: sumError } = await supabaseAdmin
+      .from("prompts")
+      .select("scores")
+      .eq("battle_id", battle_id) // Ensure we have battle_id in scope!
+      .eq("user_id", ev.user_id);
+
+    if (sumError) {
+      console.error("Error calculating sum for user:", ev.user_id, sumError);
+      continue;
+    }
+
+    const currentTotal = totalScoreData?.reduce((sum, row) => sum + (row.scores || 0), 0) || 0;
+    console.log(`User ${ev.user_id} Total Score: ${currentTotal}`);
+
+    // 5. UPSERT now works correctly thanks to the UNIQUE constraint
+    const { error: upsertError } = await supabaseAdmin
+      .from("battle_scores")
+      .upsert({
+        battle_id: battle_id,
+        user_id: ev.user_id,
+        total_score: currentTotal,
+      }, { onConflict: 'battle_id,user_id' });
+
+    if (upsertError) {
+      console.error("❌ battle_scores upsert failed", upsertError);
+    } else {
+      console.log("✅ Upserted battle_scores for user:", ev.user_id);
+    }
+  }
+
+  // 6. Recalculate Ranks for the entire battle
+  const { data: allScores } = await supabaseAdmin
+    .from("battle_scores")
+    .select("user_id, total_score")
+    .eq("battle_id", battle_id)
+    .order("total_score", { ascending: false });
+
+  if (allScores && allScores.length > 0) {
+    const rankUpdates = allScores.map((s, index) => ({
+      battle_id: battle_id,
+      user_id: s.user_id,
+      total_score: s.total_score,
+      rank: index + 1,
+    }));
+
+    const { error: rankError } = await supabaseAdmin
+      .from("battle_scores")
+      .upsert(rankUpdates, { onConflict: 'battle_id,user_id' });
+
+    if (rankError) console.error("❌ Rank update failed", rankError);
+    else console.log("📊 Ranks recalculated for battle:", battle_id);
   }
 
   /* ---------------- 6. BROADCAST ---------------- */

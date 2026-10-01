@@ -1,10 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
+import { getAuthenticatedUser } from "@/lib/apiAuth";
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+
+  // 1️⃣ Auth Check
+  const user = await getAuthenticatedUser(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
 
   const { room_id, battle_id } = req.body;
 
@@ -40,39 +46,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     /* ---------------- 2. CHECK GAME FINISHED ---------------- */
     if (nextRoundNum > battle.total_rounds) {
-      
+
       // A. Mark battle as finished
       await supabaseAdmin
         .from("battles")
         .update({ status: 'finished' })
         .eq("id", battle_id);
 
-      // B. [NEW] ARCHIVE SCORES TO HISTORY (battle_scores)
-      // 1. Fetch current scores from the room
-      const { data: currentScores } = await supabaseAdmin
-        .from("player_scores")
-        .select("user_id, total_score")
-        .eq("room_id", room_id);
+      // B. [REMOVED] History archival is now done incrementally in score-prompts.ts
 
-      if (currentScores && currentScores.length > 0) {
-        // 2. Sort by score descending to determine Rank
-        const sortedPlayers = currentScores.sort((a, b) => b.total_score - a.total_score);
-        
-        // 3. Prepare rows for insertion
-        const historyRows = sortedPlayers.map((p, index) => ({
-            battle_id: battle_id,
-            user_id: p.user_id,
-            total_score: p.total_score,
-            rank: index + 1 // Rank 1 is highest score
-        }));
-
-        // 4. Insert into battle_scores
-        const { error: historyError } = await supabaseAdmin
-            .from("battle_scores")
-            .insert(historyRows);
-
-        if (historyError) console.error("Error saving history:", historyError);
-      }
 
       // C. Broadcast Finish
       await supabaseAdmin.channel(`room-phase-${room_id}`).send({
@@ -84,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     /* ---------------- 3. NEXT ROUND LOGIC (If not finished) ---------------- */
-    
+
     // Get Image
     const { data: images } = await supabaseAdmin.from("images").select("id, url");
     const image = images![Math.floor(Math.random() * images!.length)];

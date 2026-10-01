@@ -1,6 +1,7 @@
 'use server';
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { getAuthenticatedUser } from "@/lib/apiAuth";
 
 export default async function handler(
   req: NextApiRequest,
@@ -10,10 +11,17 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { room_id, user_id } = req.body;
+  // 1️⃣ Auth Check
+  const user = await getAuthenticatedUser(req);
+  if (!user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const user_id = user.id;
 
-  if (!room_id || !user_id) {
-    return res.status(400).json({ error: "Missing room_id or user_id" });
+  const { room_id } = req.body;
+
+  if (!room_id) {
+    return res.status(400).json({ error: "Missing room_id" });
   }
 
   // Validate 6‑char alphanumeric room code

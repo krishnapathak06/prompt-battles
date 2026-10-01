@@ -1,16 +1,25 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
+import { getAuthenticatedUser } from "@/lib/apiAuth";
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // 1. Get total_rounds from frontend (default to 3 if missing)
+  // 1️⃣ Auth Check
+  const authUser = await getAuthenticatedUser(req);
+  if (!authUser) return res.status(401).json({ error: "Unauthorized" });
+
   const { room_id, user_id, total_rounds } = req.body;
 
   if (!room_id || !user_id) {
     return res.status(400).json({ error: "Missing room_id or user_id" });
+  }
+
+  if (user_id !== authUser.id) {
+    return res.status(403).json({ error: "Cannot start battle for another user" });
   }
 
   try {
@@ -38,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const allReady = nonHostPlayers.length === 0 || nonHostPlayers.every((p) => p.is_ready);
 
     if (!allReady) {
-       return res.status(400).json({ error: "All players must be ready" });
+      return res.status(400).json({ error: "All players must be ready" });
     }
 
     /* ---------------- 1. CREATE NEW BATTLE ---------------- */
@@ -46,8 +55,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 'total_rounds' comes from your Host Settings UI selector (or default 3)
     const { data: battle, error: battleErr } = await supabaseAdmin
       .from("battles")
-      .insert({ 
-        room_id, 
+      .insert({
+        room_id,
         total_rounds: total_rounds || 3,
         current_round: 1,
         status: 'active'
@@ -56,8 +65,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .single();
 
     if (battleErr) {
-       console.error("Battle Creation Error:", battleErr);
-       throw battleErr;
+      console.error("Battle Creation Error:", battleErr);
+      throw battleErr;
     }
 
     /* ---------------- 2. LINK BATTLE TO ROOM ---------------- */
@@ -70,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     /* ---------------- 3. RESET PLAYER SCORES (Optional) ---------------- */
     // If you want a fresh scoreboard for this new battle
     await supabaseAdmin.from("player_scores").delete().eq("room_id", room_id);
-    
+
     // Reset "Ready" status for next time (or keep them ready, your choice)
     // await supabaseAdmin.from("room_players").update({ is_ready: false }).eq("room_id", room_id);
 
@@ -78,7 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { data: images } = await supabaseAdmin.from("images").select("id, url");
     const randomImage = images![Math.floor(Math.random() * images!.length)];
 
-/* ---------------- 5. CREATE ROUND 1 ---------------- */
+    /* ---------------- 5. CREATE ROUND 1 ---------------- */
     const { data: round, error: roundErr } = await supabaseAdmin
       .from("rounds")
       .insert({
